@@ -336,5 +336,121 @@ cnpy::NpyArray cnpy::npy_load(std::string fname) {
     return arr;
 }
 
+static std::vector<char> string_to_utf32le(const std::string& str) {
+    std::vector<char> buf(str.size() * 4, 0);
+    for(size_t i = 0; i < str.size(); i++) {
+        buf[i * 4] = str[i];
+    }
+    return buf;
+}
 
+std::vector<char> cnpy::create_npy_header_unicode(size_t nchars) {
+    std::vector<char> dict;
+    dict += "{'descr': '<U";
+    dict += std::to_string(nchars);
+    dict += "', 'fortran_order': False, 'shape': (), }";
+
+    int remainder = 16 - (10 + dict.size()) % 16;
+    dict.insert(dict.end(), remainder, ' ');
+    dict.back() = '\n';
+
+    std::vector<char> header;
+    header += (char) 0x93;
+    header += "NUMPY";
+    header += (char) 0x01;
+    header += (char) 0x00;
+    header += (uint16_t) dict.size();
+    header.insert(header.end(), dict.begin(), dict.end());
+
+    return header;
+}
+
+void cnpy::npy_save_string(std::string fname, const std::string& str, std::string mode) {
+    std::vector<char> header = create_npy_header_unicode(str.size());
+    std::vector<char> utf32 = string_to_utf32le(str);
+
+    FILE* fp = fopen(fname.c_str(), "wb");
+    if(!fp) throw std::runtime_error("npy_save_string: Unable to open file " + fname);
+
+    fwrite(&header[0], sizeof(char), header.size(), fp);
+    fwrite(&utf32[0], sizeof(char), utf32.size(), fp);
+    fclose(fp);
+}
+
+void cnpy::npz_save_string(std::string zipname, std::string fname, const std::string& str, std::string mode) {
+    fname += ".npy";
+
+    FILE* fp = NULL;
+    uint16_t nrecs = 0;
+    size_t global_header_offset = 0;
+    std::vector<char> global_header;
+
+    if(mode == "a") fp = fopen(zipname.c_str(), "r+b");
+
+    if(fp) {
+        size_t global_header_size;
+        parse_zip_footer(fp, nrecs, global_header_size, global_header_offset);
+        fseek(fp, global_header_offset, SEEK_SET);
+        global_header.resize(global_header_size);
+        size_t res = fread(&global_header[0], sizeof(char), global_header_size, fp);
+        if(res != global_header_size) {
+            throw std::runtime_error("npz_save_string: header read error while adding to existing zip");
+        }
+        fseek(fp, global_header_offset, SEEK_SET);
+    }
+    else {
+        fp = fopen(zipname.c_str(), "wb");
+    }
+
+    std::vector<char> npy_header = create_npy_header_unicode(str.size());
+    std::vector<char> utf32 = string_to_utf32le(str);
+    size_t nbytes = npy_header.size() + utf32.size();
+
+    uint32_t crc = crc32(0L, (uint8_t*)&npy_header[0], npy_header.size());
+    crc = crc32(crc, (uint8_t*)&utf32[0], utf32.size());
+
+    std::vector<char> local_header;
+    local_header += "PK";
+    local_header += (uint16_t) 0x0403;
+    local_header += (uint16_t) 20;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint32_t) crc;
+    local_header += (uint32_t) nbytes;
+    local_header += (uint32_t) nbytes;
+    local_header += (uint16_t) fname.size();
+    local_header += (uint16_t) 0;
+    local_header += fname;
+
+    global_header += "PK";
+    global_header += (uint16_t) 0x0201;
+    global_header += (uint16_t) 20;
+    global_header.insert(global_header.end(), local_header.begin()+4, local_header.begin()+30);
+    global_header += (uint16_t) 0;
+    global_header += (uint16_t) 0;
+    global_header += (uint16_t) 0;
+    global_header += (uint32_t) 0;
+    global_header += (uint32_t) global_header_offset;
+    global_header += fname;
+
+    std::vector<char> footer;
+    footer += "PK";
+    footer += (uint16_t) 0x0605;
+    footer += (uint16_t) 0;
+    footer += (uint16_t) 0;
+    footer += (uint16_t) (nrecs+1);
+    footer += (uint16_t) (nrecs+1);
+    footer += (uint32_t) global_header.size();
+    footer += (uint32_t) (global_header_offset + nbytes + local_header.size());
+    footer += (uint16_t) 0;
+
+    fwrite(&local_header[0], sizeof(char), local_header.size(), fp);
+    fwrite(&npy_header[0], sizeof(char), npy_header.size(), fp);
+    fwrite(&utf32[0], sizeof(char), utf32.size(), fp);
+    fwrite(&global_header[0], sizeof(char), global_header.size(), fp);
+    fwrite(&footer[0], sizeof(char), footer.size(), fp);
+    fclose(fp);
+}
 
