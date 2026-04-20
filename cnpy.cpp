@@ -454,3 +454,104 @@ void cnpy::npz_save_string(std::string zipname, std::string fname, const std::st
     fclose(fp);
 }
 
+
+
+cnpy::NpzWriter::NpzWriter(std::string zipname)
+    : zipname_(std::move(zipname)) {
+    fp_ = fopen(zipname_.c_str(), "wb");
+    if(!fp_) {
+        throw std::runtime_error("NpzWriter: Unable to open file " + zipname_);
+    }
+}
+
+cnpy::NpzWriter::~NpzWriter() {
+    if(fp_) {
+        try {
+            close();
+        } catch(...) {
+            fclose(fp_);
+            fp_ = NULL;
+        }
+    }
+}
+
+void cnpy::NpzWriter::add_entry(std::string fname, const std::vector<char>& npy_header,
+                                const void* payload, size_t payload_size) {
+    if(closed_ || !fp_) {
+        throw std::runtime_error("NpzWriter: writer is not open");
+    }
+
+    fname += ".npy";
+    const size_t nbytes = npy_header.size() + payload_size;
+
+    uint32_t crc = crc32(0L, reinterpret_cast<const uint8_t*>(&npy_header[0]), npy_header.size());
+    if(payload_size > 0) {
+        crc = crc32(crc, reinterpret_cast<const uint8_t*>(payload), payload_size);
+    }
+
+    std::vector<char> local_header;
+    local_header += "PK";
+    local_header += (uint16_t) 0x0403;
+    local_header += (uint16_t) 20;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint16_t) 0;
+    local_header += (uint32_t) crc;
+    local_header += (uint32_t) nbytes;
+    local_header += (uint32_t) nbytes;
+    local_header += (uint16_t) fname.size();
+    local_header += (uint16_t) 0;
+    local_header += fname;
+
+    global_header_ += "PK";
+    global_header_ += (uint16_t) 0x0201;
+    global_header_ += (uint16_t) 20;
+    global_header_.insert(global_header_.end(), local_header.begin()+4, local_header.begin()+30);
+    global_header_ += (uint16_t) 0;
+    global_header_ += (uint16_t) 0;
+    global_header_ += (uint16_t) 0;
+    global_header_ += (uint32_t) 0;
+    global_header_ += (uint32_t) next_offset_;
+    global_header_ += fname;
+
+    fwrite(&local_header[0], sizeof(char), local_header.size(), fp_);
+    fwrite(&npy_header[0], sizeof(char), npy_header.size(), fp_);
+    if(payload_size > 0) {
+        fwrite(payload, sizeof(char), payload_size, fp_);
+    }
+
+    next_offset_ += local_header.size() + npy_header.size() + payload_size;
+    ++nrecs_;
+}
+
+void cnpy::NpzWriter::add_string(std::string fname, const std::string& str) {
+    std::vector<char> npy_header = create_npy_header_unicode(str.size());
+    std::vector<char> utf32 = string_to_utf32le(str);
+    add_entry(std::move(fname), npy_header, utf32.data(), utf32.size());
+}
+
+void cnpy::NpzWriter::close() {
+    if(closed_) return;
+    if(!fp_) {
+        closed_ = true;
+        return;
+    }
+
+    std::vector<char> footer;
+    footer += "PK";
+    footer += (uint16_t) 0x0605;
+    footer += (uint16_t) 0;
+    footer += (uint16_t) 0;
+    footer += (uint16_t) nrecs_;
+    footer += (uint16_t) nrecs_;
+    footer += (uint32_t) global_header_.size();
+    footer += (uint32_t) next_offset_;
+    footer += (uint16_t) 0;
+
+    fwrite(&global_header_[0], sizeof(char), global_header_.size(), fp_);
+    fwrite(&footer[0], sizeof(char), footer.size(), fp_);
+    fclose(fp_);
+    fp_ = NULL;
+    closed_ = true;
+}

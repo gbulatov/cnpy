@@ -3,8 +3,10 @@ project(cnpy LANGUAGES CXX)
 
 option(CNPY_BUILD_SHARED "Build shared library" OFF)
 option(CNPY_BUILD_EXAMPLES "Build example programs" OFF)
+option(CNPY_BUILD_TESTS "Build unit tests" ON)
 
 find_package(ZLIB REQUIRED)
+include(CTest)
 
 # Static library (always built)
 add_library(cnpy STATIC cnpy.cpp)
@@ -44,6 +46,12 @@ endif()
 if(CNPY_BUILD_EXAMPLES)
     add_executable(example1 example1.cpp)
     target_link_libraries(example1 cnpy)
+endif()
+
+if(CNPY_BUILD_TESTS)
+    add_executable(cnpy-tests tests/test_npz_writer.cpp)
+    target_link_libraries(cnpy-tests PRIVATE cnpy)
+    add_test(NAME cnpy-tests COMMAND cnpy-tests)
 endif()
 
 # Install

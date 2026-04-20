@@ -76,6 +76,45 @@ namespace cnpy {
     void npz_save_string(std::string zipname, std::string fname, const std::string& str, std::string mode = "w");
     void npy_save_string(std::string fname, const std::string& str, std::string mode = "w");
 
+    class NpzWriter {
+    public:
+        explicit NpzWriter(std::string zipname);
+        ~NpzWriter();
+
+        NpzWriter(const NpzWriter&) = delete;
+        NpzWriter& operator=(const NpzWriter&) = delete;
+
+        bool is_open() const { return fp_ != NULL; }
+
+        template<typename T>
+        void add_array(std::string fname, const T* data, const std::vector<size_t>& shape) {
+            std::vector<char> npy_header = create_npy_header<T>(shape);
+            size_t nels = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>());
+            add_entry(std::move(fname), npy_header, data, nels * sizeof(T));
+        }
+
+        template<typename T>
+        void add_array(std::string fname, const std::vector<T>& data, std::string mode = "w") {
+            (void)mode;
+            std::vector<size_t> shape;
+            shape.push_back(data.size());
+            add_array(std::move(fname), data.data(), shape);
+        }
+
+        void add_string(std::string fname, const std::string& str);
+        void close();
+
+    private:
+        void add_entry(std::string fname, const std::vector<char>& npy_header, const void* payload, size_t payload_size);
+
+        std::string zipname_;
+        FILE* fp_ = NULL;
+        uint16_t nrecs_ = 0;
+        size_t next_offset_ = 0;
+        std::vector<char> global_header_;
+        bool closed_ = false;
+    };
+
     template<typename T> std::vector<char>& operator+=(std::vector<char>& lhs, const T rhs) {
         //write in little endian
         for(size_t byte = 0; byte < sizeof(T); byte++) {
